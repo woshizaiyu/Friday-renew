@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Friday(dev.fr) 自动续期（Cookie 版，支持多账号扩展）
+# Friday(dev.fr) 自动续期（单账号 Cookie 版）
 # Secrets：
-#   单账号：COOKIE（格式 "PHPSESSID=xxx; user_id=yyy"）
-#   多账号：COOKIE_1 / COOKIE_2 ...（最多 10 个，预留扩展位，MVP 主测单账号）
+#   COOKIE（必填，格式 "PHPSESSID=xxx; user_id=yyy"）
+#   EMAIL（可选，通知用备注名）
 #   全局共用：GH_TOKEN / TG_BOT_TOKEN / TG_CHAT_ID / NODE_LINK(代理，可选)
 
 import os, re, sys, time, json, requests, subprocess
@@ -16,7 +16,6 @@ TG_BOT_TOKEN  = os.environ.get("TG_BOT_TOKEN") or ""
 
 BASE_URL      = "https://fridaydev.fr"
 SERVICES_URL  = f"{BASE_URL}/services/"
-MAX_ACCOUNTS  = 10
 DOMAIN        = "fridaydev.fr"
 
 # 真正的登录凭证（写入 Secrets 的只需这两项，其余站点会自动种）
@@ -39,28 +38,14 @@ def parse_cookie_str(raw: str):
     return pairs
 
 
-def collect_accounts():
-    accounts = []
-    for i in range(1, MAX_ACCOUNTS + 1):
-        raw = (os.environ.get(f"COOKIE_{i}") or "").strip()
-        email = (os.environ.get(f"EMAIL_{i}") or "").strip()
-        if raw:
-            accounts.append({"idx": i, "cookie_raw": raw, "email": email,
-                             "secret_name": f"COOKIE_{i}", "legacy": False})
-    if accounts:
-        legacy = (os.environ.get("COOKIE") or "").strip()
-        if legacy and 1 not in {a["idx"] for a in accounts}:
-            accounts.insert(0, {"idx": 1, "cookie_raw": legacy,
-                                "email": (os.environ.get("EMAIL") or "").strip(),
-                                "secret_name": "COOKIE_1", "legacy": False})
-        accounts.sort(key=lambda a: a["idx"])
-        return accounts
-    legacy = (os.environ.get("COOKIE") or "").strip()
-    if not legacy:
-        return []
-    return [{"idx": 1, "cookie_raw": legacy,
-             "email": (os.environ.get("EMAIL") or "").strip(),
-             "secret_name": "COOKIE", "legacy": True}]
+def get_account():
+    """单账号：读 COOKIE + EMAIL，缺 COOKIE 返回 None。"""
+    raw = (os.environ.get("COOKIE") or "").strip()
+    if not raw:
+        return None
+    return {"cookie_raw": raw,
+            "email": (os.environ.get("EMAIL") or "").strip(),
+            "secret_name": "COOKIE"}
 
 
 def mask_email(email: str) -> str:
@@ -211,8 +196,8 @@ def dismiss_cookie_banner(sb):
 
 # ---------- 登录（HidenCloud 双通道结构，MVP 只实现 Cookie 通道） ----------
 
-def login_with_cookie(sb, acct) -> bool:
-    pairs = parse_cookie_str(acct["cookie_raw"])
+def login_with_cookie(sb, cookie_raw) -> bool:
+    pairs = parse_cookie_str(cookie_raw)
     if not pairs:
         print("❌ COOKIE 为空或格式错误（应为 a=b; c=d）")
         return False
@@ -245,17 +230,17 @@ def login_with_cookie(sb, acct) -> bool:
     return False
 
 
-def login_with_password(sb, acct) -> bool:
+def login_with_password(sb) -> bool:
     """账密备用通道（二期扩展位，MVP 未实现）。"""
     print("ℹ️ 账密备用通道尚未实现（MVP 仅 Cookie 登录）")
     return False
 
 
-def login(sb, acct) -> bool:
-    if login_with_cookie(sb, acct):
+def login(sb, cookie_raw) -> bool:
+    if login_with_cookie(sb, cookie_raw):
         return True
     print("🔄 Cookie 登录失败，尝试账密备用通道...")
-    return login_with_password(sb, acct)
+    return login_with_password(sb)
 
 
 # ---------- 续期（wabiss 三态判定移植） ----------
@@ -301,13 +286,11 @@ def click_modal_confirm(sb) -> bool:
     return False
 
 
-def renew_one_account(sb, acct) -> dict:
-    idx, email = acct["idx"], acct["email"] or f"账号{idx}"
-    tag = f"[账号{idx}]"
+def renew(sb, cookie_raw, email) -> dict:
     result = {"ok": False, "summary": "未知"}
-    shot = f"result_{idx}.png"
+    shot = "result.png"
 
-    if not login(sb, acct):
+    if not login(sb, cookie_raw):
         msg = format_notification("❌ 登录失败", email=email,
                                   error="Cookie 已失效，请从浏览器重拷 COOKIE 更新 Secrets")
         send_telegram_message(msg)
@@ -320,7 +303,7 @@ def renew_one_account(sb, acct) -> dict:
         page_text = ""
     old_dates = extract_dates(page_text)
     old_max = max(old_dates) if old_dates else None
-    print(f"{tag} 📅 当前页面日期: "
+    print(f"📅 当前页面日期: "
           f"{[d.strftime('%d/%m/%Y') for d in old_dates] or '（未提取到）'}")
 
     # 未到时间态
@@ -328,7 +311,7 @@ def renew_one_account(sb, acct) -> dict:
     btn, btn_text = find_renew_button(sb)
 
     if btn is None and not_yet:
-        print(f"{tag} ⏳ 未到续期时间：{not_yet} 后可续")
+        print(f"⏳ 未到续期时间：{not_yet} 后可续")
         send_telegram_message(format_notification(
             "⏳ 未到续期时间", email=email,
             extra=f"⏱️ {not_yet}后可续",
@@ -336,7 +319,7 @@ def renew_one_account(sb, acct) -> dict:
         result.update(ok=True, summary=f"⏳ 未到时间（{not_yet}后）")
 
     elif btn is not None:
-        print(f"{tag} ✅ 发现续期按钮: '{btn_text}'，点击...")
+        print(f"✅ 发现续期按钮: '{btn_text}'，点击...")
         try:
             btn.click()
         except Exception:
@@ -344,13 +327,13 @@ def renew_one_account(sb, acct) -> dict:
                 sb.execute_script("arguments[0].click();", btn)
             except Exception as e:
                 err = f"点击续期按钮失败: {e}"
-                print(f"{tag} ❌ {err}")
+                print(f"❌ {err}")
                 send_telegram_message(format_notification("❌ 续期失败", email=email, error=err))
                 result["summary"] = "❌ 续期失败（点击按钮出错）"
                 return result
         sb.sleep(4)
         click_modal_confirm(sb)
-        print(f"{tag} ⏳ 等待结果并刷新...")
+        print("⏳ 等待结果并刷新...")
         sb.sleep(5)
         try:
             sb.execute_script("location.reload();")
@@ -374,7 +357,7 @@ def renew_one_account(sb, acct) -> dict:
         except Exception:
             shot = ""
         if ok:
-            print(f"{tag} ✅ 续期成功，新日期: "
+            print(f"✅ 续期成功，新日期: "
                   f"{[d.strftime('%d/%m/%Y') for d in new_dates] or '（状态活跃）'}")
             send_telegram_photo(format_notification(
                 "✅ 续期成功", email=email,
@@ -383,13 +366,13 @@ def renew_one_account(sb, acct) -> dict:
             result.update(ok=True,
                           summary=f"✅ 续期成功（到期 {new_max.strftime('%d/%m/%Y') if new_max else '活跃'}）")
         else:
-            print(f"{tag} ⚠️ 续期结果未知，请手动检查")
+            print("⚠️ 续期结果未知，请手动检查")
             send_telegram_photo(format_notification(
                 "⚠️ 续期可能未成功", email=email, extra="请登录后台检查",
                 old_due=old_max.strftime("%d/%m/%Y") if old_max else "（未获取到）"), shot)
             result["summary"] = "⚠️ 结果未知（请手动检查）"
     else:
-        print(f"{tag} ℹ️ 未找到续期按钮/倒计时，状态未知")
+        print("ℹ️ 未找到续期按钮/倒计时，状态未知")
         send_telegram_message(format_notification(
             "ℹ️ 状态未知", email=email, extra="未找到续期按钮，请手动检查",
             old_due=old_max.strftime("%d/%m/%Y") if old_max else "（未获取到）"))
@@ -398,30 +381,29 @@ def renew_one_account(sb, acct) -> dict:
     # Cookie 有效期预警 + 自动回写
     warn = cookie_expiry_warning(sb)
     if warn:
-        print(f"{tag} {warn}")
+        print(warn)
         send_telegram_message(format_notification("🔔 Cookie 有效期预警", email=email, extra=warn))
-    new_raw = rebuild_cookie_str(sb, acct["cookie_raw"])
+    new_raw = rebuild_cookie_str(sb, cookie_raw)
     if new_raw:
-        print(f"{tag} 🔄 浏览器 Cookie 有更新，回写 Secrets...")
+        print("🔄 浏览器 Cookie 有更新，回写 Secrets...")
         if GH_TOKEN:
-            print(f"{tag} {'✅ 回写成功' if update_github_secret(acct['secret_name'], new_raw) else '⚠️ 回写失败，请检查 GH_TOKEN'}")
+            print('✅ 回写成功' if update_github_secret("COOKIE", new_raw) else '⚠️ 回写失败，请检查 GH_TOKEN')
         else:
-            print(f"{tag} ⚠️ 未设置 GH_TOKEN，无法自动回写")
+            print("⚠️ 未设置 GH_TOKEN，无法自动回写")
     else:
-        print(f"{tag} ✅ Cookie 无需更新")
+        print("✅ Cookie 无需更新")
     return result
 
 
 def main():
     print("#" * 25)
-    print("   Friday 自动续期")
+    print("   Friday 自动续期（单账号）")
     print("#" * 25)
 
-    accounts = collect_accounts()
-    if not accounts:
-        print("ℹ️ 未配置 COOKIE(_N)，脚本终止。Secrets 里填 COOKIE 或 COOKIE_1（格式 a=b; c=d）。")
+    acct = get_account()
+    if not acct:
+        print("ℹ️ 未配置 COOKIE，脚本终止。Secrets 里填 COOKIE（格式 a=b; c=d）。")
         sys.exit(1)
-    print(f"📋 共发现 {len(accounts)} 个账号")
 
     IS_PROXY = os.environ.get("IS_PROXY", "false").lower() == "true"
     PROXY_SERVER = os.environ.get("PROXY_SERVER", "").strip() or "http://127.0.0.1:1080"
@@ -431,40 +413,25 @@ def main():
     if IS_PROXY:
         sb_kwargs["proxy"] = PROXY_SERVER
 
-    results = {}
     with SB(**sb_kwargs) as sb:
         try:
             print(f"📍 当前出口IP: {get_current_ip(PROXY_SERVER if IS_PROXY else '')}")
         except Exception as e:
             print(f"⚠️ 获取出口 IP 失败: {e}")
-        for acct in accounts:
-            print("\n" + "=" * 40)
-            print(f"▶️ 开始处理 账号{acct['idx']}")
-            print("=" * 40)
+        try:
+            result = renew(sb, acct["cookie_raw"], acct["email"])
+        except Exception as e:
+            print(f"❌ 执行异常: {e}")
+            import traceback
+            traceback.print_exc()
+            result = {"ok": False, "summary": f"❌ 执行异常：{e}"}
             try:
-                results[acct["idx"]] = renew_one_account(sb, acct)
-            except Exception as e:
-                print(f"[账号{acct['idx']}] ❌ 执行异常: {e}")
-                import traceback
-                traceback.print_exc()
-                results[acct["idx"]] = {"ok": False, "summary": f"❌ 执行异常：{e}"}
-                try:
-                    send_telegram_message(format_notification(
-                        "❌ 续期失败", email=acct["email"], error=f"执行异常：{e}"))
-                except Exception:
-                    pass
+                send_telegram_message(format_notification(
+                    "❌ 续期失败", email=acct["email"], error=f"执行异常：{e}"))
+            except Exception:
+                pass
 
-    print("\n🏁 全部账号执行完毕，汇总：")
-    lines = ["🇫🇷 Friday 多账号续期汇总", ""]
-    for acct in accounts:
-        r = results.get(acct["idx"], {"ok": False, "summary": "未执行"})
-        mark = "✅" if r["ok"] else "❌"
-        print(f"   {mark} 账号{acct['idx']}：{r['summary']}")
-        lines.append(f"{mark} 账号{acct['idx']}：{r['summary']}")
-    try:
-        send_telegram_message("\n".join(lines))
-    except Exception as e:
-        print(f"⚠️ 汇总通知发送失败: {e}")
+    print(f"\n🏁 执行完毕：{result['summary']}")
 
 
 if __name__ == "__main__":

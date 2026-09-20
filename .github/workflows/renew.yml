@@ -37,12 +37,7 @@ jobs:
       - name: 🚀 运行续期脚本
         env:
           COOKIE: ${{ secrets.COOKIE }}
-          COOKIE_1: ${{ secrets.COOKIE_1 }}
-          COOKIE_2: ${{ secrets.COOKIE_2 }}
-          COOKIE_3: ${{ secrets.COOKIE_3 }}
-          EMAIL_1: ${{ secrets.EMAIL_1 }}
-          EMAIL_2: ${{ secrets.EMAIL_2 }}
-          EMAIL_3: ${{ secrets.EMAIL_3 }}
+          EMAIL: ${{ secrets.EMAIL }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
@@ -54,7 +49,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: friday-result
-          path: result_*.png
+          path: result.png
           if-no-files-found: ignore
 
       - name: 🧽 清理进程和临时文件
@@ -64,7 +59,7 @@ jobs:
           pkill -f chromedriver || true
           pkill -f chrome || true
           pkill -f Xvfb || true
-          rm -f sing-box sing-box-config.json sing-box.log result_*.png
+          rm -f sing-box sing-box-config.json sing-box.log result.png
 
       - name: 🧹 清理旧的工作流运行记录
         if: always()

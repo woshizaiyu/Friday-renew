@@ -1,4 +1,4 @@
-## 🚀 Friday 自动续期（GitHub Actions，Cookie 版）
+## 🚀 Friday 自动续期（GitHub Actions，单账号 Cookie 版）
 
 定时登录 [Friday](https://fridaydev.fr/services/) 自动续期免费服务（5 天手动续一次，脚本每天巡检）。
 
@@ -6,15 +6,13 @@
 
 | Secret 名称   | 是否必填 | 说明                                                        |
 |---------------|----------|-------------------------------------------------------------|
-| COOKIE / COOKIE_1 | ✅ 必填 | Friday 登录 Cookie，格式 `PHPSESSID=xxx; user_id=yyy`（至少填其中之一） |
-| COOKIE_2 / COOKIE_3 | ❌ 可选 | 多账号扩展位（`app.py` 最多支持到 `COOKIE_10`，workflow 需自行加行透传） |
-| EMAIL_1 等    | ❌ 可选  | 通知用备注名，可随意填写                                    |
+| COOKIE        | ✅ 必填  | Friday 登录 Cookie，格式 `PHPSESSID=xxx; user_id=yyy`       |
+| EMAIL         | ❌ 可选  | 通知用备注名，可随意填写                                    |
 | GH_TOKEN      | ❌ 可选  | GitHub(classic) token，用于 Cookie 刷新后自动回写，以 `ghp_` 开头 |
 | NODE_LINK     | ❌ 可选  | 代理链接（vless/vmess/trojan/hysteria2/tuic/anytls/socks5 等） |
 | TG_BOT_TOKEN  | ❌ 可选  | Telegram Bot Token（用于发送通知，含截图）                  |
 | TG_CHAT_ID    | ❌ 可选  | Telegram Chat ID（接收通知的用户或群组 ID）                 |
 
-> * `COOKIE`（不带编号）与 `COOKIE_1` 二选一即可；同时配了编号时优先编号。
 > * Cookie 有效期约 30 天：脚本每次跑通会自动回写最新串；`user_id` 剩余不足 3 天会 TG 预警；彻底失效时 TG 会告警"Cookie 已失效"，需手动重拷。
 > * 账密备用登录为二期扩展位，MVP 仅 Cookie 登录。
 
@@ -31,7 +29,7 @@
 1. 浏览器登录 https://fridaydev.fr/ 。
 2. 按 F12 ➡ 应用程序（Application）➡ 左侧 Cookie ➡ `https://fridaydev.fr`。
 3. 复制 `PHPSESSID` 和 `user_id` 的值（`user_id` 保持原样，别解码），拼成一行：
-   `PHPSESSID=xxx; user_id=yyy`，填入 `COOKIE_1`。
+   `PHPSESSID=xxx; user_id=yyy`，填入 `COOKIE`。
 
 ### 获取 `GH_TOKEN`
 
