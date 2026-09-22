@@ -2,7 +2,7 @@ name: Auto Renew Friday
 
 on:
   schedule:
-    - cron: '0 7 * * *' # 每天UTC 7点（北京时间15点），免费档5天一续，每天巡检一次
+    - cron: '0 7 */3 * *' # 每天UTC 7点（北京时间15点），免费档5天一续，每天巡检一次
   workflow_dispatch:
 
 jobs:
