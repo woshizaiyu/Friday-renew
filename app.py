@@ -22,6 +22,13 @@ DOMAIN        = "fridaydev.fr"
 AUTH_COOKIES  = ("PHPSESSID", "user_id")
 # Cookie 剩余有效期低于此天数则 TG 预警
 EXPIRY_WARN_DAYS = 3
+# 日志档位：默认只打关键里程碑；VERBOSE=true 时输出过程细节（定位/轮询/关闭动作）
+VERBOSE = (os.environ.get("VERBOSE") or "false").lower() == "true"
+
+
+def vlog(msg):
+    if VERBOSE:
+        print(msg)
 
 
 def parse_cookie_str(raw: str):
@@ -187,7 +194,7 @@ def dismiss_cookie_banner(sb):
         try:
             if sb.is_element_visible(sel):
                 sb.click(sel)
-                print("🍪 已关闭 Cookie 横幅")
+                vlog("🍪 已关闭 Cookie 横幅")
                 sb.sleep(1)
                 return
         except Exception:
@@ -257,7 +264,7 @@ def find_renew_button(sb):
                 t = (el.text or "").strip()
                 if t and "renouvelable dans" not in t.lower():
                     uuid = el.get_attribute("data-uuid") or ""
-                    print(f"🎯 命中 grounded 选择器 ({sel}, data-uuid={uuid}): '{t}'")
+                    vlog(f"🎯 命中 grounded 选择器 ({sel}, data-uuid={uuid}): '{t}'")
                     return el, t
         except Exception:
             continue
@@ -307,12 +314,12 @@ def solve_free_captcha(sb, tag) -> bool:
         if gone:
             print(f"{tag} ✅ 验证自动通过")
             return True
-    print(f"{tag} ⏳ 未自解，转手动点击...")
+    vlog(f"{tag} ⏳ 未自解，转手动点击...")
     for attempt in range(1, 4):
         try:
             sb.uc_gui_click_captcha()
         except Exception as e:
-            print(f"{tag} ⚠️ 点击验证出错: {e}")
+            vlog(f"{tag} ⚠️ 点击验证出错: {e}")
         for _ in range(6):
             sb.sleep(2)
             try:
@@ -320,7 +327,7 @@ def solve_free_captcha(sb, tag) -> bool:
             except Exception:
                 gone = True
             if gone:
-                print(f"{tag} ✅ 验证层已消失")
+                vlog(f"{tag} ✅ 验证层已消失")
                 return True
             try:
                 tok = sb.execute_script(
@@ -328,9 +335,9 @@ def solve_free_captcha(sb, tag) -> bool:
             except Exception:
                 tok = ""
             if tok:
-                print(f"{tag} ✅ 已拿到验证票据（长度 {len(tok)}）")
+                vlog(f"{tag} ✅ 已拿到验证票据（长度 {len(tok)}）")
                 return True
-        print(f"{tag} ⏳ 第 {attempt} 次验证未通过，重试...")
+        vlog(f"{tag} ⏳ 第 {attempt} 次验证未通过，重试...")
     print(f"{tag} ❌ 验证最终未通过")
     return False
 
@@ -361,7 +368,7 @@ def click_modal_confirm(sb, tag="") -> bool:
                     cands.append((b, (b.text or "").strip()))
             except Exception:
                 continue
-        print(f"📝 确认区按钮: {[t for _, t in cands] or '（空）'}")
+        vlog(f"📝 确认区按钮: {[t for _, t in cands] or '（空）'}")
         order = []
         for b, t in cands:
             tl = t.lower()
@@ -422,7 +429,7 @@ def close_success_notice(sb, tag=""):
     except Exception:
         body = ""
     if body and re.search(r"renouvel|success|succès|5 jours", body, re.IGNORECASE):
-        print(f"{tag} 🎉 成功弹窗: '{body.strip().replace(chr(10), ' ')[:120]}'")
+        vlog(f"{tag} 🎉 成功弹窗: '{body.strip().replace(chr(10), ' ')[:120]}'")
         for sel in ['.fdui-overlay.fdui-open [data-act="ok"]',
                     '.fdui-overlay.fdui-open .fdui-actions button:last-child']:
             try:
@@ -484,7 +491,7 @@ def renew(sb, cookie_raw, email) -> dict:
         click_modal_confirm(sb, tag)
         sb.sleep(3)
         close_success_notice(sb, tag)
-        print("⏳ 等待结果并刷新...")
+        vlog("⏳ 等待结果并刷新...")
         sb.sleep(5)
         try:
             sb.execute_script("location.reload();")
@@ -536,13 +543,13 @@ def renew(sb, cookie_raw, email) -> dict:
         send_telegram_message(format_notification("🔔 Cookie 有效期预警", email=email, extra=warn))
     new_raw = rebuild_cookie_str(sb, cookie_raw)
     if new_raw:
-        print("🔄 浏览器 Cookie 有更新，回写 Secrets...")
+        vlog("🔄 浏览器 Cookie 有更新，回写 Secrets...")
         if GH_TOKEN:
             print('✅ 回写成功' if update_github_secret("COOKIE", new_raw) else '⚠️ 回写失败，请检查 GH_TOKEN')
         else:
             print("⚠️ 未设置 GH_TOKEN，无法自动回写")
     else:
-        print("✅ Cookie 无需更新")
+        vlog("✅ Cookie 无需更新")
     return result
 
 
