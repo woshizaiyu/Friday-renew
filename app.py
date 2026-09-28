@@ -289,11 +289,95 @@ def find_not_yet_text(page_text: str) -> str:
     return f"{m.group(1)} 天" if m else ""
 
 
-def click_modal_confirm(sb) -> bool:
-    sels = [".modal.show button.btn-primary", ".modal.show button",
-            ".swal2-confirm", 'button:contains("Confirmer")',
-            'button:contains("Valider")', 'button:contains("Confirm")']
-    for sel in sels:
+def solve_free_captcha(sb, tag) -> bool:
+    """免费续期触发 428 captcha_required 时，fdCaptchaSolve 会弹 .fd-captcha-backdrop
+   （官方注释：大多数情况 1-2 秒自动解）。backdrop 消失或拿到票据即算过。"""
+    try:
+        if not sb.is_element_visible(".fd-captcha-backdrop", timeout=8):
+            return True  # 没弹验证，直接过
+    except Exception:
+        return True
+    print(f"{tag} 🔒 弹出反机器人验证，尝试通过...")
+    for attempt in range(1, 4):
+        try:
+            sb.uc_gui_click_captcha()
+        except Exception as e:
+            print(f"{tag} ⚠️ 点击验证出错: {e}")
+        for _ in range(6):
+            sb.sleep(2)
+            try:
+                gone = not sb.is_element_visible(".fd-captcha-backdrop", timeout=1)
+            except Exception:
+                gone = True
+            if gone:
+                print(f"{tag} ✅ 验证层已消失")
+                return True
+            try:
+                tok = sb.execute_script(
+                    "try{return (typeof turnstile!=='undefined'&&turnstile.getResponse)?turnstile.getResponse():'';}catch(e){return '';}")
+            except Exception:
+                tok = ""
+            if tok:
+                print(f"{tag} ✅ 已拿到验证票据（长度 {len(tok)}）")
+                return True
+        print(f"{tag} ⏳ 第 {attempt} 次验证未通过，重试...")
+    print(f"{tag} ❌ 验证最终未通过")
+    return False
+
+
+def click_modal_confirm(sb, tag="") -> bool:
+    """fdui 确认弹窗 grounded（录制 2026-09-28）：
+    .fdui-overlay.fdui-open > .fdui-modal > .fdui-actions > button.fdui-btn-ghost
+    （文案是自定义的"保留免费优惠"类，不是 Confirmer/Valider）。"""
+    try:
+        sb.wait_for_element_visible(".fdui-overlay.fdui-open .fdui-modal", timeout=15)
+    except Exception:
+        print("⚠️ 未探测到 fdui 确认弹窗，走旧选择器兜底")
+    if not solve_free_captcha(sb, tag):
+        try:
+            sb.save_screenshot("captcha_fail.png")
+        except Exception:
+            pass
+        return False
+    # 枚举确认区按钮，启发式选"保留/确认"（排除 Annuler），兜底点最后一个（录制点的就是 ghost 位）
+    try:
+        raw = sb.find_elements(".fdui-overlay.fdui-open .fdui-actions button")
+        cands = []
+        for b in raw:
+            try:
+                if b.is_displayed():
+                    cands.append((b, (b.text or "").strip()))
+            except Exception:
+                continue
+        print(f"📝 确认区按钮: {[t for _, t in cands] or '（空）'}")
+        order = []
+        for b, t in cands:
+            tl = t.lower()
+            if "annuler" in tl or "cancel" in tl:
+                continue
+            if re.search(r"garder|conserver|gratuit|offre|confirmer|valider|renew|^ok$", tl):
+                order.insert(0, (b, t))
+            else:
+                order.append((b, t))
+        if not order and cands:
+            order = [cands[-1]]
+        for b, t in order:
+            try:
+                b.click()
+                print(f"✅ 已点击确认按钮: '{t[:60]}'")
+                return True
+            except Exception:
+                try:
+                    sb.execute_script("arguments[0].click();", b)
+                    print(f"✅ 已 JS 点击确认按钮: '{t[:60]}'")
+                    return True
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"⚠️ 枚举确认按钮异常: {e}")
+    for sel in [".modal.show button.btn-primary", ".modal.show button",
+                ".swal2-confirm", 'button:contains("Confirmer")',
+                'button:contains("Valider")', 'button:contains("Confirm")']:
         try:
             if sb.is_element_visible(sel):
                 sb.click(sel, timeout=3)
@@ -351,7 +435,7 @@ def renew(sb, cookie_raw, email) -> dict:
                 result["summary"] = "❌ 续期失败（点击按钮出错）"
                 return result
         sb.sleep(4)
-        click_modal_confirm(sb)
+        click_modal_confirm(sb, tag)
         print("⏳ 等待结果并刷新...")
         sb.sleep(5)
         try:
