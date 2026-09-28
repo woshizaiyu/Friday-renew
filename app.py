@@ -339,16 +339,18 @@ def click_modal_confirm(sb, tag="") -> bool:
     """fdui 确认弹窗 grounded（录制 2026-09-28）：
     .fdui-overlay.fdui-open > .fdui-modal > .fdui-actions > button.fdui-btn-ghost
     （文案是自定义的"保留免费优惠"类，不是 Confirmer/Valider）。"""
-    try:
-        sb.wait_for_element_visible(".fdui-overlay.fdui-open .fdui-modal", timeout=15)
-    except Exception:
-        print("⚠️ 未探测到 fdui 确认弹窗，走旧选择器兜底")
+    # 顺序（录制时间线）：点续期 → 428 → 验证 → 前端自动带票据 POST（200）→ 成功弹窗 → 点 ghost 确认。
+    # 验证在前、弹窗在后，不可颠倒；且成功 POST 是前端自动发的，ghost 点击只是收尾。
     if not solve_free_captcha(sb, tag):
         try:
             sb.save_screenshot("captcha_fail.png")
         except Exception:
             pass
         return False
+    try:
+        sb.wait_for_element_visible(".fdui-overlay.fdui-open .fdui-modal", timeout=15)
+    except Exception:
+        print("⚠️ 未探测到 fdui 确认弹窗，走旧选择器兜底")
     # 枚举确认区按钮，启发式选"保留/确认"（排除 Annuler），兜底点最后一个（录制点的就是 ghost 位）
     try:
         raw = sb.find_elements(".fdui-overlay.fdui-open .fdui-actions button")
