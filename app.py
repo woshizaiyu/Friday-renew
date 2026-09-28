@@ -297,7 +297,17 @@ def solve_free_captcha(sb, tag) -> bool:
             return True  # 没弹验证，直接过
     except Exception:
         return True
-    print(f"{tag} 🔒 弹出反机器人验证，尝试通过...")
+    print(f"{tag} 🔒 弹出反机器人验证，先静等自动通过（官方多为 1-2 秒自解）...")
+    for _ in range(15):  # 30 秒静等自解，别碰它
+        sb.sleep(2)
+        try:
+            gone = not sb.is_element_visible(".fd-captcha-backdrop", timeout=1)
+        except Exception:
+            gone = True
+        if gone:
+            print(f"{tag} ✅ 验证自动通过")
+            return True
+    print(f"{tag} ⏳ 未自解，转手动点击...")
     for attempt in range(1, 4):
         try:
             sb.uc_gui_click_captcha()
@@ -389,6 +399,40 @@ def click_modal_confirm(sb, tag="") -> bool:
     return False
 
 
+def close_success_notice(sb, tag=""):
+    """过盾后弹出的成功通知（toast 右上 × / 成功弹窗 OK），直接关闭即可。
+    注意：绝不碰 .fd-captcha-cancel（那是"取消订单"）。"""
+    try:
+        if sb.is_element_visible(".fdui-toast-close", timeout=3):
+            txt = ""
+            try:
+                toast = sb.find_element(".fdui-toast")
+                txt = (toast.text or "").strip().replace("\n", " ")[:120]
+            except Exception:
+                pass
+            sb.click(".fdui-toast-close", timeout=3)
+            print(f"{tag} 🔕 已关闭成功通知: '{txt}'")
+            return True
+    except Exception:
+        pass
+    try:
+        body = sb.get_text(".fdui-overlay.fdui-open .fdui-modal") or ""
+    except Exception:
+        body = ""
+    if body and re.search(r"renouvel|success|succès|5 jours", body, re.IGNORECASE):
+        print(f"{tag} 🎉 成功弹窗: '{body.strip().replace(chr(10), ' ')[:120]}'")
+        for sel in ['.fdui-overlay.fdui-open [data-act="ok"]',
+                    '.fdui-overlay.fdui-open .fdui-actions button:last-child']:
+            try:
+                if sb.is_element_visible(sel, timeout=3):
+                    sb.click(sel, timeout=3)
+                    print(f"{tag} 🔕 已关闭成功弹窗 ({sel})")
+                    return True
+            except Exception:
+                continue
+    return False
+
+
 def renew(sb, cookie_raw, email) -> dict:
     result = {"ok": False, "summary": "未知"}
     shot = "result.png"
@@ -436,6 +480,8 @@ def renew(sb, cookie_raw, email) -> dict:
                 return result
         sb.sleep(4)
         click_modal_confirm(sb, tag)
+        sb.sleep(3)
+        close_success_notice(sb, tag)
         print("⏳ 等待结果并刷新...")
         sb.sleep(5)
         try:
