@@ -246,7 +246,23 @@ def login(sb, cookie_raw) -> bool:
 # ---------- 续期（wabiss 三态判定移植） ----------
 
 def find_renew_button(sb):
-    """找可点的续期按钮；返回 (element, text)。排除 'Renouvelable dans' 未到时间态。"""
+    """找可点的续期按钮；返回 (element, text)。排除 'Renouvelable dans' 未到时间态。
+    录制 grounded 2026-09-28：<button class="btn-renew js-free-renew" data-uuid="...">
+    Renouveler gratuitement (5 jours)</button> —— 文案带 "(N jours)" 后缀，结尾锚点必漏。"""
+    # 快车道：功能类名定位（改版也不易动，比文案稳）
+    for sel in [".js-free-renew", ".btn-renew", "button[data-uuid]"]:
+        try:
+            if sb.is_element_visible(sel):
+                el = sb.find_element(sel)
+                t = (el.text or "").strip()
+                if t and "renouvelable dans" not in t.lower():
+                    uuid = el.get_attribute("data-uuid") or ""
+                    print(f"🎯 命中 grounded 选择器 ({sel}, data-uuid={uuid}): '{t}'")
+                    return el, t
+        except Exception:
+            continue
+    # 文案兜底：包含即命中（不再锚定结尾，兼容 "(5 jours)" 等后缀）
+    seen = []
     try:
         btns = sb.find_elements("button, a")
     except Exception:
@@ -258,10 +274,13 @@ def find_renew_button(sb):
             t = (el.text or "").strip()
             if not t or "renouvelable dans" in t.lower():
                 continue
-            if re.search(r"Renouveler(\s+gratuitement)?\s*$", t):
+            seen.append(t[:60])
+            if re.search(r"Renouveler", t, re.IGNORECASE):
                 return el, t
         except Exception:
             continue
+    if seen:
+        print(f"🔍 未命中续期按钮，可见按钮文案: {seen[:15]}")
     return None, ""
 
 
