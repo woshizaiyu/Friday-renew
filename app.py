@@ -152,6 +152,30 @@ def extract_dates(page_text: str):
     return out
 
 
+def extract_renewal_date(sb):
+    """优先从 .service-info 精确提取到期日（实测 HTML）：
+    <div class="service-info"><span>Renouvellement</span><strong>13/10/2026</strong></div>
+    找不到回落整页正则。单账号取首个命中；大小写不敏感（截图大写/源码首字母大写混用）。"""
+    try:
+        for el in sb.find_elements(".service-info"):
+            try:
+                t = el.text or ""
+            except Exception:
+                continue
+            if "renouvellement" in t.lower():
+                m = re.search(r"(\d{2})/(\d{2})/(\d{4})", t)
+                if m:
+                    try:
+                        d = datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+                        vlog(f"🎯 精确到期日 (.service-info): {d.strftime('%d/%m/%Y')}")
+                        return d
+                    except ValueError:
+                        pass
+    except Exception:
+        pass
+    return None
+
+
 def cookie_expiry_warning(sb) -> str:
     """检查 user_id Cookie 剩余有效期，不足阈值返回预警文案，否则返回空串。"""
     try:
@@ -572,7 +596,7 @@ def renew(sb, cookie_raw, email, current_ip="未知") -> dict:
     except Exception:
         page_text = ""
     old_dates = extract_dates(page_text)
-    old_max = max(old_dates) if old_dates else None
+    old_max = extract_renewal_date(sb) or (max(old_dates) if old_dates else None)
     print(f"📅 当前页面日期: "
           f"{[d.strftime('%d/%m/%Y') for d in old_dates] or '（未提取到）'}")
 
@@ -631,7 +655,7 @@ def renew(sb, cookie_raw, email, current_ip="未知") -> dict:
         except Exception:
             new_text = ""
         new_dates = extract_dates(new_text)
-        new_max = max(new_dates) if new_dates else None
+        new_max = extract_renewal_date(sb) or (max(new_dates) if new_dates else None)
         ok = False
         if old_max and new_max and new_max > old_max:
             ok = True
