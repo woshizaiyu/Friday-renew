@@ -2,7 +2,7 @@ name: Auto Renew Friday
 
 on:
   schedule:
-    - cron: '0 7 */3 * *' # 每天UTC 7点（北京时间15点），免费档5天一续，每天巡检一次
+    - cron: '30 23 * * 1' # 根据到期时间的前一天推算星期几来续期，最后一个数字代表星期（RENOUVELLEMENT 13/10/2026，周二到期，周一跑，即北京时间周二早7:30）
   workflow_dispatch:
 
 jobs:
@@ -19,6 +19,11 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+
+      - name: 🔍 静态检查（未定义变量，如 NameError 类 bug）
+        run: |
+          pip install ruff
+          ruff check --select F821,F822,F823 app.py
 
       - name: 🛠️ 安装系统依赖和 Python 依赖
         run: |

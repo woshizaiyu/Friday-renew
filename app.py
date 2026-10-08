@@ -117,20 +117,20 @@ def update_github_secret(secret_name, new_value):
 
 
 def format_notification(status: str, email: str = "", extra: str = "",
-                        error: str = "", old_due: str = "", new_due: str = "") -> str:
-    """Hiden 风格：续期成功时双行展示续期前/后到期，其余状态单行展示到期时间。"""
+                        error: str = "", old_due: str = "", new_due: str = "",
+                        current_ip: str = "未知") -> str:
+    """佬王同款（eooce 风，见技能族 tg-notify-style.md）：
+    标题 + 状态 + 脱敏账号 + 前后到期双行 + 出口IP + 北京时间。"""
     now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(time.time() + 8 * 3600))
-    lines = ["🇫🇷 Friday 续期通知", "", f"{status}", f"👤 账户: {mask_email(email) or '账号'}"]
-    if new_due:
-        lines.append(f"📅 续期前到期：{old_due or '（未获取到）'}")
-        lines.append(f"📅 续期后到期：{new_due}")
-    elif old_due:
-        lines.append(f"📅 到期时间: {old_due}")
+    lines = ["🎉 Friday 续期通知", "", f"{status}", f"👤 账号: {mask_email(email)}"]
+    lines.append(f"📅 续期前到期：{old_due or '（未获取到）'}")
+    lines.append(f"📅 续期后到期：{new_due or '（未获取到）'}")
     if extra:
         lines.append(extra)
     if error:
-        lines.append(f"⚠️ 错误信息: {error}")
-    lines.append(f"⏱️ 执行时间: {now}(北京时间)")
+        lines.append(f"📝 {error}")
+    lines.append(f"🌐 续期使用IP: {current_ip}")
+    lines.append(f"🕒 续期时间：{now}")
     return "\n".join(lines)
 
 
@@ -253,22 +253,25 @@ def login(sb, cookie_raw) -> bool:
 # ---------- 续期（wabiss 三态判定移植） ----------
 
 def find_renew_button(sb):
-    """找可点的续期按钮；返回 (element, text)。排除 'Renouvelable dans' 未到时间态。
-    录制 grounded 2026-09-28：<button class="btn-renew js-free-renew" data-uuid="...">
-    Renouveler gratuitement (5 jours)</button> —— 文案带 "(N jours)" 后缀，结尾锚点必漏。"""
+    """找可点的续期按钮；返回 (element, text)。Friday 双文案（均实测为续期入口）：
+    ① <button class="btn-renew js-free-renew" data-uuid="...">Renouveler gratuitement (5 jours)</button>
+      （录制 grounded 2026-09-28，文案带 "(N jours)" 后缀，结尾锚点必漏）；
+    ② 蓝色 "Renouvelable dans N jour(s)" 按钮（2026-10 实测）：点后弹 CF 验证组件，
+       节点纯净自动过盾，过盾即默认续期完成 —— 它就是续期入口，绝不能当"未到时间"跳过。
+    只要是可见的 Renouvel* 按钮就命中；无按钮但有倒计时文案才算未到时间（见 find_not_yet_text）。"""
     # 快车道：功能类名定位（改版也不易动，比文案稳）
     for sel in [".js-free-renew", ".btn-renew", "button[data-uuid]"]:
         try:
             if sb.is_element_visible(sel):
                 el = sb.find_element(sel)
                 t = (el.text or "").strip()
-                if t and "renouvelable dans" not in t.lower():
+                if t:
                     uuid = el.get_attribute("data-uuid") or ""
                     vlog(f"🎯 命中 grounded 选择器 ({sel}, data-uuid={uuid}): '{t}'")
                     return el, t
         except Exception:
             continue
-    # 文案兜底：包含即命中（不再锚定结尾，兼容 "(5 jours)" 等后缀）
+    # 文案兜底：包含即命中（不再锚定结尾，兼容 "(5 jours)" 等后缀与倒计时按钮）
     seen = []
     try:
         btns = sb.find_elements("button, a")
@@ -279,10 +282,10 @@ def find_renew_button(sb):
             if not el.is_displayed():
                 continue
             t = (el.text or "").strip()
-            if not t or "renouvelable dans" in t.lower():
+            if not t:
                 continue
             seen.append(t[:60])
-            if re.search(r"Renouveler", t, re.IGNORECASE):
+            if re.search(r"Renouvel", t, re.IGNORECASE):
                 return el, t
         except Exception:
             continue
@@ -339,6 +342,117 @@ def solve_free_captcha(sb, tag) -> bool:
                 return True
         vlog(f"{tag} ⏳ 第 {attempt} 次验证未通过，重试...")
     print(f"{tag} ❌ 验证最终未通过")
+    return False
+
+
+# ---------- CF Turnstile（eooce/Auto-Renew-HidenCloud 方法论移植到 SeleniumBase） ----------
+# eooce 口径：表单/弹窗内嵌 Turnstile 多为非交互/自动模式，无需点击、约 8s 自出票据；
+# 票据判定 = turnstile.getResponse()（索引 0~5）或隐藏 input 值长度 > 30；
+# 有复选框才点（节流 6s+），点过且框消失即算过；20s 无框且没点过 → 视为无需验证直接过。
+# 反检测沿用 SB UC 模式（undetected-chromedriver 内核）+ headful 真渲染，不碰 window.chrome。
+CF_IFRAME_SEL = 'iframe[src*="challenges.cloudflare.com"]'
+
+
+def _cf_turnstile_token(sb) -> str:
+    """读 Turnstile 票据，有即代表验证通过（eooce _get_turnstile_token 同款逻辑）。"""
+    try:
+        return sb.execute_script(
+            "try {"
+            "  if (typeof turnstile !== 'undefined' && turnstile.getResponse) {"
+            "    var t = null;"
+            "    try { t = turnstile.getResponse(); } catch (e) {}"
+            "    if (t && t.length > 30) return t;"
+            "    for (var i = 0; i < 5; i++) {"
+            "      try { t = turnstile.getResponse(String(i)); } catch (e) { t = null; }"
+            "      if (t && t.length > 30) return t;"
+            "    }"
+            "  }"
+            "} catch (e) {}"
+            "var inputs = document.querySelectorAll("
+            "  'input[name=\"cf-turnstile-response\"], input[id$=\"_response\"]');"
+            "for (var k = 0; k < inputs.length; k++) {"
+            "  if (inputs[k].value && inputs[k].value.length > 30) return inputs[k].value;"
+            "}"
+            "return '';") or ""
+    except Exception:
+        return ""
+
+
+def _expand_cf_widget(sb):
+    """把被盖住/压缩的验证框展开（orihost 同款），免得点不到。"""
+    try:
+        sb.execute_script(
+            "document.querySelectorAll('.cf-turnstile').forEach(function(c){"
+            "  c.style.overflow='visible';c.style.width='300px';c.style.height='65px';});"
+            "document.querySelectorAll('iframe').forEach(function(f){"
+            "  if(f.src&&f.src.indexOf('challenges.cloudflare.com')!==-1){"
+            "    f.style.width='300px';f.style.height='65px';"
+            "    f.style.visibility='visible';f.style.opacity='1';}});")
+    except Exception:
+        pass
+
+
+def _click_cf_widget(sb) -> bool:
+    """点验证框中心（自动模式下通常不需要，交互模式兜底）。"""
+    _expand_cf_widget(sb)
+    try:
+        if sb.is_element_visible(CF_IFRAME_SEL, timeout=3):
+            sb.click(CF_IFRAME_SEL, timeout=5)
+            return True
+    except Exception:
+        pass
+    try:
+        sb.execute_script(
+            "var f=document.querySelector('iframe[src*=\"challenges.cloudflare.com\"]');"
+            "if(f){var r=f.getBoundingClientRect();"
+            "var x=r.left+r.width/2,y=r.top+r.height/2;"
+            "['mousedown','mouseup','click'].forEach(function(t){"
+            "f.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,"
+            "clientX:x,clientY:y,view:window}));});}")
+        return True
+    except Exception:
+        return False
+
+
+def solve_cf_turnstile(sb, tag="") -> bool:
+    """点续期按钮后弹出的 CF 验证组件。节点纯净时自动模式几秒自过，直接返回 True；
+    20s 无框且没点过 → 视为无需验证（eooce 启发式）；超时未出票据返回 False。"""
+    try:
+        has_frame = sb.is_element_visible(CF_IFRAME_SEL, timeout=20)
+    except Exception:
+        has_frame = False
+    if not has_frame:
+        vlog(f"{tag} ℹ️ 未检测到 CF 验证框，无需验证")
+        return True
+    print(f"{tag} 🔒 检测到 Cloudflare 验证，等待自动通过...")
+    start = time.time()
+    clicks = 0
+    last_click = 0.0
+    while time.time() - start < 90:
+        if _cf_turnstile_token(sb):
+            print(f"{tag} ✅ CF 验证通过（已拿到票据）")
+            return True
+        try:
+            frame_gone = not sb.is_element_visible(CF_IFRAME_SEL, timeout=1)
+        except Exception:
+            frame_gone = True
+        if frame_gone:
+            # 框渲染后自行消失（自动通过/页面已推进）：视为通过，
+            # 真正的仲裁交给后续日期对比，误判最多落到"结果未知"告警
+            print(f"{tag} ✅ CF 验证框已消失，视为通过")
+            return True
+        if time.time() - last_click > 8:
+            vlog(f"{tag} 🖱️ 点击 CF 验证框（第 {clicks + 1} 次）...")
+            if _click_cf_widget(sb):
+                clicks += 1
+                last_click = time.time()
+                sb.sleep(4)
+                continue
+        sb.sleep(2)
+    if _cf_turnstile_token(sb):
+        print(f"{tag} ✅ CF 验证通过（超时前命中票据）")
+        return True
+    print(f"{tag} ❌ CF 验证超时（90s 未出票据）")
     return False
 
 
@@ -442,12 +556,12 @@ def close_success_notice(sb, tag=""):
     return False
 
 
-def renew(sb, cookie_raw, email) -> dict:
+def renew(sb, cookie_raw, email, current_ip="未知") -> dict:
     result = {"ok": False, "summary": "未知"}
     shot = "result.png"
 
     if not login(sb, cookie_raw):
-        msg = format_notification("❌ 登录失败", email=email,
+        msg = format_notification("❌ 登录失败", email=email, current_ip=current_ip,
                                   error="Cookie 已失效，请从浏览器重拷 COOKIE 更新 Secrets")
         send_telegram_message(msg)
         result["summary"] = "❌ 登录失败（Cookie 失效）"
@@ -469,12 +583,13 @@ def renew(sb, cookie_raw, email) -> dict:
     if btn is None and not_yet:
         print(f"⏳ 未到续期时间：{not_yet} 后可续")
         send_telegram_message(format_notification(
-            "⏳ 未到续期时间", email=email,
+            "⏳ 未到续期时间", email=email, current_ip=current_ip,
             extra=f"⏱️ {not_yet}后可续",
             old_due=old_max.strftime("%d/%m/%Y") if old_max else "（未获取到）"))
         result.update(ok=True, summary=f"⏳ 未到时间（{not_yet}后）")
 
     elif btn is not None:
+        tag = f"[{email}]" if email else ""
         print(f"✅ 发现续期按钮: '{btn_text}'，点击...")
         try:
             btn.click()
@@ -484,10 +599,22 @@ def renew(sb, cookie_raw, email) -> dict:
             except Exception as e:
                 err = f"点击续期按钮失败: {e}"
                 print(f"❌ {err}")
-                send_telegram_message(format_notification("❌ 续期失败", email=email, error=err))
+                send_telegram_message(format_notification("❌ 续期失败", email=email, current_ip=current_ip, error=err))
                 result["summary"] = "❌ 续期失败（点击按钮出错）"
                 return result
         sb.sleep(4)
+        # 点按钮后弹 CF 验证组件（Turnstile）：节点纯净自动过盾，过盾即默认续期完成；
+        # 无框（旧 Renouveler 流程/已验证过）直接返回 True 继续走 fdCaptcha + 确认弹窗
+        if not solve_cf_turnstile(sb, tag):
+            try:
+                sb.save_screenshot("cf_fail.png")
+            except Exception:
+                pass
+            err = "CF 验证未通过（Turnstile 90s 未出票据），请检查节点纯净度后手动重试"
+            print(f"❌ {err}")
+            send_telegram_message(format_notification("❌ 续期失败", email=email, current_ip=current_ip, error=err))
+            result["summary"] = "❌ 续期失败（CF 验证未通过）"
+            return result
         click_modal_confirm(sb, tag)
         sb.sleep(3)
         close_success_notice(sb, tag)
@@ -518,7 +645,7 @@ def renew(sb, cookie_raw, email) -> dict:
             print(f"✅ 续期成功，新日期: "
                   f"{[d.strftime('%d/%m/%Y') for d in new_dates] or '（状态活跃）'}")
             send_telegram_photo(format_notification(
-                "✅ 续期成功", email=email,
+                "✅ 续期成功", email=email, current_ip=current_ip,
                 old_due=old_max.strftime("%d/%m/%Y") if old_max else "",
                 new_due=new_max.strftime("%d/%m/%Y") if new_max else "（状态活跃）"), shot)
             result.update(ok=True,
@@ -526,13 +653,13 @@ def renew(sb, cookie_raw, email) -> dict:
         else:
             print("⚠️ 续期结果未知，请手动检查")
             send_telegram_photo(format_notification(
-                "⚠️ 续期可能未成功", email=email, extra="请登录后台检查",
+                "⚠️ 续期可能未成功", email=email, current_ip=current_ip, extra="请登录后台检查",
                 old_due=old_max.strftime("%d/%m/%Y") if old_max else "（未获取到）"), shot)
             result["summary"] = "⚠️ 结果未知（请手动检查）"
     else:
         print("ℹ️ 未找到续期按钮/倒计时，状态未知")
         send_telegram_message(format_notification(
-            "ℹ️ 状态未知", email=email, extra="未找到续期按钮，请手动检查",
+            "ℹ️ 状态未知", email=email, current_ip=current_ip, extra="未找到续期按钮，请手动检查",
             old_due=old_max.strftime("%d/%m/%Y") if old_max else "（未获取到）"))
         result["summary"] = "ℹ️ 状态未知"
 
@@ -540,7 +667,7 @@ def renew(sb, cookie_raw, email) -> dict:
     warn = cookie_expiry_warning(sb)
     if warn:
         print(warn)
-        send_telegram_message(format_notification("🔔 Cookie 有效期预警", email=email, extra=warn))
+        send_telegram_message(format_notification("🔔 Cookie 有效期预警", email=email, current_ip=current_ip, extra=warn))
     new_raw = rebuild_cookie_str(sb, cookie_raw)
     if new_raw:
         vlog("🔄 浏览器 Cookie 有更新，回写 Secrets...")
@@ -565,19 +692,21 @@ def main():
 
     IS_PROXY = os.environ.get("IS_PROXY", "false").lower() == "true"
     PROXY_SERVER = os.environ.get("PROXY_SERVER", "").strip() or "http://127.0.0.1:1080"
-    HEADLESS = os.environ.get("HEADLESS", "true").lower() == "true"  # Friday 无盾，默认 headless
+    HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"  # CF Turnstile 需 headful 真渲染（eooce 口径），CI 跑在 xvfb 虚拟屏上
     sb_kwargs = {"uc": True, "headless": HEADLESS}
     print(f"🔗 {'挂载代理: ' + PROXY_SERVER if IS_PROXY else '🍭 未使用代理，直连访问'}")
     if IS_PROXY:
         sb_kwargs["proxy"] = PROXY_SERVER
 
     with SB(**sb_kwargs) as sb:
+        current_ip = "未知"
         try:
-            print(f"📍 当前出口IP: {get_current_ip(PROXY_SERVER if IS_PROXY else '')}")
+            current_ip = get_current_ip(PROXY_SERVER if IS_PROXY else '')
+            print(f"📍 当前出口IP: {current_ip}")
         except Exception as e:
             print(f"⚠️ 获取出口 IP 失败: {e}")
         try:
-            result = renew(sb, acct["cookie_raw"], acct["email"])
+            result = renew(sb, acct["cookie_raw"], acct["email"], current_ip)
         except Exception as e:
             print(f"❌ 执行异常: {e}")
             import traceback
@@ -585,7 +714,7 @@ def main():
             result = {"ok": False, "summary": f"❌ 执行异常：{e}"}
             try:
                 send_telegram_message(format_notification(
-                    "❌ 续期失败", email=acct["email"], error=f"执行异常：{e}"))
+                    "❌ 续期失败", email=acct["email"], current_ip=current_ip, error=f"执行异常：{e}"))
             except Exception:
                 pass
 

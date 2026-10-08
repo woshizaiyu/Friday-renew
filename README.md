@@ -37,7 +37,7 @@
 
 ## 注意事项
 
-* Friday 免费档每 5 天需点一次 `Renouveler gratuitement` 并确认弹窗，脚本已覆盖：可续则点，未到时间（`Renouvelable dans X jours`）则只通知。
+* Friday 免费档续期入口有两种文案（都是点它续期）：`Renouveler gratuitement (N jours)`，以及蓝色按钮 `Renouvelable dans N jour(s)`——后者点后弹 CF 验证组件（Turnstile），节点纯净自动过盾即默认续期完成。浏览器 headful 跑在 xvfb 上（Turnstile 需真渲染）。无按钮但有倒计时文案才算未到时间，只通知不点。
 * cron 运行时间不一定准时，以 Actions 实际触发为准。
 
 ## ⚠️ 免责声明
